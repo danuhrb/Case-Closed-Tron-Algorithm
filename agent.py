@@ -214,6 +214,8 @@ class MinimaxAgent:
         self.voronoi = VoronoiCalculator()
         self.nodes_searched = 0
         self.start_time = None
+        self.transposition_table = {}  # Cache for previously evaluated positions
+        self.cache_hits = 0
 
     def evaluate_state(self, state, player_num):
         """
@@ -267,6 +269,23 @@ class MinimaxAgent:
 
         return score if player_num == 1 else -score
 
+    def hash_state(self, state):
+        """Create fast hash of game state for transposition table"""
+        # Convert trails to hashable format (nested lists to tuples)
+        trail1 = tuple(tuple(p) if isinstance(p, (list, deque)) else p for p in state.agent1_trail)
+        trail2 = tuple(tuple(p) if isinstance(p, (list, deque)) else p for p in state.agent2_trail)
+        
+        return hash((
+            trail1,
+            trail2,
+            state.agent1_boosts,
+            state.agent2_boosts,
+            state.agent1_alive,
+            state.agent2_alive,
+            state.agent1_dir,
+            state.agent2_dir
+        ))
+    
     def get_valid_moves(self, state, player_num):
         """Get valid moves (excluding opposite direction)"""
         all_moves = ['UP', 'DOWN', 'LEFT', 'RIGHT']
@@ -286,7 +305,7 @@ class MinimaxAgent:
     
     def minimax(self, state, depth, alpha, beta, maximizing_player, player_num):
         """
-        Mimimax with alpha-beta pruning
+        Minimax with alpha-beta pruning and transposition table
         maximizing_player: True if we're maximizing for player_num
         """
         self.nodes_searched += 1
@@ -295,9 +314,18 @@ class MinimaxAgent:
         if time.time() - self.start_time > self.time_limit:
             return self.evaluate_state(state, player_num), None
         
+        # Transposition table lookup
+        state_hash = self.hash_state(state)
+        if state_hash in self.transposition_table:
+            cached_depth, cached_score, cached_move = self.transposition_table[state_hash]
+            if cached_depth >= depth:  # Cached result is from same or deeper search
+                self.cache_hits += 1
+                return cached_score, cached_move
+        
         # Terminal conditions
         if depth == 0 or not state.agent1_alive or not state.agent2_alive:
-            return self.evaluate_state(state, player_num), None
+            eval_score = self.evaluate_state(state, player_num)
+            return eval_score, None
 
         # Get valid moves (excluding opposite direction)
         my_moves = self.get_valid_moves(state, player_num)
@@ -341,6 +369,9 @@ class MinimaxAgent:
                     
                 if beta <= alpha:
                     break
+            
+            # Store in transposition table
+            self.transposition_table[state_hash] = (depth, max_eval, best_move)
             return max_eval, best_move
         else:
             min_eval = float('inf')
@@ -368,12 +399,14 @@ class MinimaxAgent:
                     
                 if beta <= alpha:
                     break
+            
+            # Store in transposition table
+            self.transposition_table[state_hash] = (depth, min_eval, None)
             return min_eval, None
     
     def get_best_move(self, game_state, player_num):
-        """ Main entry point"""
+        """ Main entry point with iterative deepening"""
         self.start_time = time.time()
-        self.nodes_searched = 0
         
         # Get current directions from the trail history
         def infer_direction(trail):
@@ -413,14 +446,36 @@ class MinimaxAgent:
             game_state.get('agent2_alive', True)
         )
         
-        # Run minimax
-        score, move = self.minimax(sim_state, self.max_depth, 
-                                   float('-inf'), float('inf'), True, player_num)
+        # ITERATIVE DEEPENING: Try increasing depths until timeout
+        best_move = 'RIGHT'
+        best_score = float('-inf')
+        completed_depth = 0
+        
+        # Clear cache between turns (keeps memory manageable)
+        if len(self.transposition_table) > 100000:
+            self.transposition_table.clear()
+        
+        self.cache_hits = 0
+        total_nodes = 0
+        
+        for depth in range(1, 10):  # Try depths 1-9
+            if time.time() - self.start_time > 3.3:  # Stop early to avoid timeout
+                break
+            
+            self.nodes_searched = 0
+            score, move = self.minimax(sim_state, depth, 
+                                       float('-inf'), float('inf'), True, player_num)
+            
+            if move:
+                best_move = move
+                best_score = score
+                completed_depth = depth
+                total_nodes += self.nodes_searched
         
         elapsed = time.time() - self.start_time
-        print(f"[Player {player_num}] Minimax: {self.nodes_searched} nodes, {elapsed:.2f}s, move={move}, eval={score}")
+        print(f"[Player {player_num}] Depth {completed_depth}: {total_nodes} nodes, {self.cache_hits} cache hits, {elapsed:.2f}s, move={best_move}, eval={best_score}")
         
-        return move if move else 'RIGHT'  # Fallback to RIGHT if no move found
+        return best_move
 
 
 
@@ -508,7 +563,7 @@ def send_move():
     # Initialize minimax agent if not already created
     global minimax_agent
     if minimax_agent is None:
-        minimax_agent = MinimaxAgent(max_depth=4, time_limit=3.5)
+        minimax_agent = MinimaxAgent(max_depth=10, time_limit=3.9)
     
     # Use minimax to get the best move
     try:
@@ -542,4 +597,4 @@ def end_game():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5008"))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=port, debug=False)
