@@ -15,8 +15,8 @@ LAST_POSTED_STATE = {}
 
 game_lock = Lock()
  
-PARTICIPANT = "ParticipantX"
-AGENT_NAME = "AgentX"
+PARTICIPANT = "Uhrbrock"
+AGENT_NAME = "PruneRunner"
 
 # Initialize the minimax agent globally
 minimax_agent = None
